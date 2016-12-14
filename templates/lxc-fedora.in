@@ -221,7 +221,9 @@ configure_fedora()
     fi
 
     # configure the network using the dhcp
-    cat <<EOF > ${rootfs_path}/etc/sysconfig/network-scripts/ifcfg-eth0
+    if [ $release -lt 25 ]
+    then
+        cat <<EOF > ${rootfs_path}/etc/sysconfig/network-scripts/ifcfg-eth0
 DEVICE=eth0
 BOOTPROTO=dhcp
 ONBOOT=yes
@@ -232,11 +234,23 @@ TYPE=Ethernet
 MTU=${MTU}
 EOF
 
-    # set the hostname
-    cat <<EOF > ${rootfs_path}/etc/sysconfig/network
+        # set the hostname
+        cat <<EOF > ${rootfs_path}/etc/sysconfig/network
 NETWORKING=yes
 HOSTNAME=${utsname}
 EOF
+    else
+        # for recent Fedora releases >=25 use systemd-networkd instead of
+        # the traditional 'network' init script
+        mkdir -p ${rootfs_path}/etc/systemd/network
+        cat <<EOF > ${rootfs_path}/etc/systemd/network/eth0.network
+[Match]
+Name=eth0
+
+[Network]
+DHCP=yes
+EOF
+    fi
 
     # set hostname on systemd Fedora systems
     if [ $release -gt 14 ]; then
@@ -322,10 +336,25 @@ EOF
 
     if [[ ! -e ${rootfs_path}/sbin/NetworkManager ]]
     then
-        # NetworkManager has not been installed.  Use the
-        # legacy chkconfig command to enable the network startup
-        # scripts in the container.
-        chroot ${rootfs_path} chkconfig network on
+        # NetworkManager has not been installed.
+        if [ $release -lt 25 ]
+        then
+            # Use the legacy chkconfig command to enable the network startup
+            # scripts in the container.
+            chroot ${rootfs_path} chkconfig network on
+        else
+            # For recent Fedora releases >=25 enable systemd-networkd
+            mkdir -p ${rootfs_path}/etc/systemd/system/socket.target.wants
+            chroot ${rootfs_path} ln -s /usr/lib/systemd/system/systemd-networkd.socket /etc/systemd/system/socket.target.wants/
+            chroot ${rootfs_path} ln -s /usr/lib/systemd/system/systemd-networkd.service /etc/systemd/system/multi-user.target.wants/
+            mkdir -p ${rootfs_path}/etc/systemd/system/network-online.target.wants
+            chroot ${rootfs_path} ln -s /usr/lib/systemd/system/systemd-networkd-wait-online.service /etc/systemd/system/network-online.target.wants/
+            # After this we shouldn't do any chroot networking anymore, as
+            # DNS lookups won't work anymore
+            rm -f ${rootfs_path}/etc/resolv.conf
+            chroot ${rootfs_path} ln -s /run/systemd/resolve/resolv.conf /etc/resolv.conf
+            chroot ${rootfs_path} ln -s /usr/lib/systemd/system/systemd-resolved.service /etc/systemd/system/multi-user.target.wants/
+        fi
     fi
 
     umount ${rootfs_path}/proc
