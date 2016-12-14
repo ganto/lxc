@@ -426,15 +426,8 @@ configure_fedora_systemd()
 #
 # Steps:
 #       Stage 0 - Download a Fedora LiveOS squashfs core (netinst core).
-#       Stage 1 - Extract filesystem from Stage 0 and update to full rpm & yum
-#       Stage 2 - Use Stage 1 to build a rootfs with python, rpm, and yum.
-#
-#       Stage 2 becomes our bootstrap file system which can be cached
-#       and then used to build other arbitrary vesions of Fedora of a
-#       given architecture.  Note that this only has to run once for
-#       Fedora on a given architecture since rpm and yum can build other
-#       versions.  We'll arbitrarily pick Fedora 20 to build this.  This
-#       will need to change as time goes on.
+#       Stage 1 - Extract filesystem from Stage 0 and build a rootfs with
+#                 python, rpm, and dnf.
 
 # Programmers Note...  A future fall back may be to download the netinst
 #       iso image instead of the LiveOS squasfs image and work from that.
@@ -534,7 +527,7 @@ Existing Bootstrap found.  Testing..."
             cp /etc/resolv.conf ${bootstrap}/etc/
             rm -f ${bootstrap}/var/lib/rpm/__db*
             chroot ${bootstrap} rpm --rebuilddb
-            chroot ${bootstrap} yum -y update
+            chroot ${bootstrap} dnf -y update
             RC=$?
             umount ${bootstrap}/proc
             umount ${bootstrap}/dev
@@ -576,23 +569,23 @@ but appears to be non-functional.  Skipping...  It should be removed.
 #       3 - It supports rsync and wildcarding (and we need both)
 #       4 - Not all the mirrors carry the LiveOS images
 
-    if [[ ! -f ../LiveOS/squashfs.img ]]
+    if [[ ! -f ../install.img ]]
     then
         echo "
 Downloading stage 0 LiveOS squashfs file system from archives.fedoraproject.org...
-Have a beer or a cup of coffee.  This will take a bit (~300MB).
+Have a beer or a cup of coffee.  This will take a bit (~350MB).
 "
         sleep 3 # let him read it...
 
-        # Right now, we are using Fedora 20 for the inial bootstrap.
+        # Right now, we are using Fedora 24 for the initial bootstrap.
         # We could make this the "current" Fedora rev (F > 15).
 
-        rsync -av ${mirrorurl}/fedora/linux/releases/20/Fedora/$basearch/os/LiveOS .
+        rsync -av ${mirrorurl}/linux/releases/24/Everything/$basearch/os/images/install.img .
 
         if [[ 0 == $? ]]
         then
             echo "Download of squashfs image complete."
-            mv LiveOS ..
+            mv install.img ..
         else
             echo "
 Download of squashfs image failed.
@@ -603,7 +596,7 @@ Download of squashfs image failed.
         echo "Using cached stage 0 LiveOS squashfs file system."
     fi
 
-    mount -o loop ../LiveOS/squashfs.img squashfs
+    mount -o loop ../install.img squashfs
 
     if [[ $? != 0 ]]
     then
@@ -612,7 +605,7 @@ Mount of LiveOS squashfs image failed!  You mush have squashfs support
 available to mount image.  Unable to continue.  Correct and retry
 process later!  LiveOS image not removed.  Process may be rerun
 without penalty of downloading LiveOS again.  If LiveOS is corrupt,
-remove ${cache_base}/LiveOS before rerunning to redownload.
+remove ${cache_base}/install.img before rerunning to redownload.
 "
         return 255
     fi
@@ -633,8 +626,9 @@ troubleshoot cached image and then rerun process.
 ### Stage 1 setup.
 #       Copy stage0 (which is ro) to stage1 area (rw) for modification.
 #       Unmount stage0 mounts - we're done with stage 0 at this point.
-#       Download our rpm and yum rpm packages.
-#       Force install of rpm and yum into stage1 image (dirty hack!)
+#       Download our Fedora Release rpm packages.
+#       Install fedora-release into stage1 to get the repository info.
+#       Install rpm, dnf and fedora-release into bootstrap image using dnf.
 
     echo "Stage 0 complete, building Stage 1 image...
 This will take a couple of minutes.  Patience..."
@@ -656,63 +650,27 @@ This will take a couple of minutes.  Patience..."
     # Always make sure /etc/resolv.conf is up to date in the target!
     cp /etc/resolv.conf etc/
 
+    rsync -av ${mirrorurl}/linux/releases/24/Everything/$basearch/os/Packages/f/fedora-release-24* \
+        ${mirrorurl}/linux/releases/24/Everything/$basearch/os/Packages/f/fedora-repos-24* .
+
+    # dnf will read the repository information from the chroot
+    chroot . rpm --nodeps -ivh fedora-re*
+
+    # dnf will take $basearch from host, so force the arch we want
+    sed -i "s|\$basearch|$basearch|" ./etc/yum.repos.d/*
+    sed -i "s|\$releasever|24|" ./etc/yum.repos.d/*
+
     mkdir run/install
-
-    echo "Updating Stage 1 image with full rpm and yum packages"
-
-    # Retrieve our 2 rpm packages we need to force down the throat
-    # of this LiveOS image we're camped out on.  This is the beginning
-    # of the butt ugly hack.  Look close or you may missing it...
-
-    rsync -av ${mirrorurl}/fedora/linux/releases/20/Fedora/$basearch/os/Packages/r/rpm-[0-9]* \
-        ${mirrorurl}/fedora/linux/releases/20/Fedora/$basearch/os/Packages/y/yum-[0-9]* .
-
-    # And here it is...
-    # The --nodeps is STUPID but F15 had a bogus dependency on RawHide?!?!
-    chroot . rpm -ivh --nodeps rpm-* yum-*
-    # Did you catch it?
-
-    # The LiveOS image contains rpm (but not rpmdb) and yum (but not
-    # yummain.py - What the hell good does yum do with no
-    # yummain.py?!?! - Sigh...).  It contains all the supporting
-    # pieces but the rpm database has not be initialized and it
-    # doesn't know all the dependences (seem to) have been met.
-    # So we do a "--nodeps" rpm install in the chrooted environment
-    # to force the installation of the full rpm and yum packages.
-    #
-    # For the purists - Yes, I know the rpm database is wildly out
-    # of whack now.  That's why this is a butt ugly hack / dirty trick.
-    # But, this is just the stage1 image that we are going to discard as
-    # soon as the stage2 image is built, so we don't care.  All we care
-    # is that the stage2 image ends up with all the pieces it need to
-    # run yum and rpm and that the stage2 rpm database is coherent.
-    #
-    # NOW we can really go to work!
-
-### Stage 2 setup.
-#       Download our Fedora Release rpm packages.
-#       Install fedora-release into bootstrap to initialize fs and databases.
-#       Install rpm, and yum into bootstrap image using yum
-
-    echo "Stage 1 creation complete.  Building stage 2 Installation Bootstrap"
-
     mount -o bind ../bootstrap run/install
-    rsync -av ${mirrorurl}/fedora/linux/releases/20/Fedora/$basearch/os/Packages/f/fedora-release-20* .
 
-    # The --nodeps is STUPID but F15 had a bogus dependency on RawHide?!?!
-    chroot . rpm --root /run/install --nodeps -ivh fedora-release-*
-
-    # yum will take $basearch from host, so force the arch we want
-    sed -i "s|\$basearch|$basearch|" ./run/install/etc/yum.repos.d/*
-
-    chroot . yum -y --nogpgcheck --installroot /run/install install python rpm yum
+    chroot . dnf -y --nogpgcheck --installroot /run/install install rpm dnf fedora-release-24
 
     umount run/install
     umount proc
     umount dev
 
 #       That's it!  We should now have a viable installation BOOTSTRAP in
-#       bootstrap  We'll do a yum update in that to verify and then
+#       bootstrap  We'll do a dnf update in that to verify and then
 #       move it to the cache location before cleaning up.
 
     cd ../bootstrap
@@ -721,10 +679,10 @@ This will take a couple of minutes.  Patience..."
     # Always make sure /etc/resolv.conf is up to date in the target!
     cp /etc/resolv.conf etc/
 
-    # yum will take $basearch from host, so force the arch we want
+    # dnf will take $basearch from host, so force the arch we want
     sed -i "s|\$basearch|$basearch|" ./etc/yum.repos.d/*
 
-    chroot . yum -y update
+    chroot . dnf -y update
 
     RC=$?
 
@@ -819,7 +777,7 @@ download_fedora()
     BOOTSTRAP_CHROOT=
     BOOTSTRAP_DIR=
 
-    PKG_LIST="yum initscripts passwd rsyslog vim-minimal openssh-server openssh-clients dhclient chkconfig rootfiles policycoreutils fedora-release"
+    PKG_LIST="dnf initscripts passwd rsyslog vim-minimal openssh-server openssh-clients dhclient chkconfig rootfiles policycoreutils fedora-release"
     MIRRORLIST_URL="http://mirrors.fedoraproject.org/mirrorlist?repo=fedora-$release&arch=$basearch"
 
     if [[ ${release} -lt 17 ]]
@@ -931,10 +889,10 @@ download_fedora()
       ${BOOTSTRAP_CHROOT}rpm --root ${BOOTSTRAP_INSTALL_ROOT} -ivh ${BOOTSTRAP_INSTALL_ROOT}/${REPOS_RPM}
     fi
 
-    # yum will take $basearch from host, so force the arch we want
+    # dnf will take $basearch from host, so force the arch we want
     sed -i "s|\$basearch|$basearch|" ${BOOTSTRAP_DIR}/${BOOTSTRAP_INSTALL_ROOT}/etc/yum.repos.d/*
 
-    ${BOOTSTRAP_CHROOT}yum --installroot ${BOOTSTRAP_INSTALL_ROOT} -y --nogpgcheck install ${PKG_LIST}
+    ${BOOTSTRAP_CHROOT}dnf --installroot ${BOOTSTRAP_INSTALL_ROOT} -y --nogpgcheck install ${PKG_LIST}
 
     RC=$?
 
@@ -1026,7 +984,7 @@ update_fedora()
     mount -t proc proc ${cache}/rootfs/proc
     # Always make sure /etc/resolv.conf is up to date in the target!
     cp /etc/resolv.conf ${cache}/rootfs/etc/
-    chroot ${cache}/rootfs yum -y update
+    chroot ${cache}/rootfs dnf -y update
     umount ${cache}/rootfs/proc
     umount  ${cache}/rootfs/dev
 }
@@ -1247,7 +1205,7 @@ armv6l|armv7l|armv8l) basearch=armhfp ;;
 *) ;;
 esac
 
-mirrorurl="archives.fedoraproject.org::fedora-archive"
+mirrorurl="archives.fedoraproject.org::fedora-enchilada"
 case "$basearch" in
 ppc64|s390x) mirrorurl="archives.fedoraproject.org::fedora-secondary" ;;
 *) ;;
