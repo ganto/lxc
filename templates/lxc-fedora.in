@@ -777,7 +777,7 @@ download_fedora()
     BOOTSTRAP_CHROOT=
     BOOTSTRAP_DIR=
 
-    PKG_LIST="dnf initscripts passwd rsyslog vim-minimal openssh-server openssh-clients dhclient chkconfig rootfiles policycoreutils fedora-release"
+    PKG_LIST="initscripts passwd vim-minimal openssh-server openssh-clients dhclient rootfiles policycoreutils fedora-release"
     MIRRORLIST_URL="http://mirrors.fedoraproject.org/mirrorlist?repo=fedora-$release&arch=$basearch"
 
     if [[ ${release} -lt 17 ]]
@@ -793,6 +793,17 @@ download_fedora()
         # Since Fedora 21, a separate fedora-repos package is needed.
         # Before, the information was conained in fedora-release.
         PKG_LIST="${PKG_LIST} fedora-repos"
+    fi
+
+    if [[ ${release} -lt 25 ]]
+    then
+        # Although these packages are not really required for a minimal
+        # container, don't break behaviour with previous version of this
+        # template for Fedora <=24 containers as people might rely on it
+        # when downloading these images from linuxcontainers.org.
+        PKG_LIST="${PKG_LIST} yum rsyslog chkconfig"
+    else
+        PKG_LIST="${PKG_LIST} dnf"
     fi
 
     DOWNLOAD_OK=no
