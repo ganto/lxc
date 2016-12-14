@@ -1324,8 +1324,8 @@ if [ -z "$release" ]; then
     if [ "$is_fedora" -a "$fedora_host_ver" ]; then
         release=$fedora_host_ver
     else
-        echo "This is not a fedora host and release missing, defaulting to 22 use -R|--release to specify release"
-        release=22
+        echo "This is not a fedora host and release missing, defaulting to 24 use -R|--release to specify release"
+        release=24
     fi
 fi
 
