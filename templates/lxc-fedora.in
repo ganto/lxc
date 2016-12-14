@@ -995,7 +995,15 @@ update_fedora()
     mount -t proc proc ${cache}/rootfs/proc
     # Always make sure /etc/resolv.conf is up to date in the target!
     cp /etc/resolv.conf ${cache}/rootfs/etc/
-    chroot ${cache}/rootfs dnf -y update
+    if [ -x ${cache}/rootfs/usr/bin/dnf ]
+    then
+        pkg_mgr=dnf
+        chroot ${cache}/rootfs ${pkg_mgr} --refresh -y update
+    else
+        pkg_mgr=yum
+        chroot ${cache}/rootfs ${pkg_mgr} -y update
+    fi
+    chroot ${cache}/rootfs ${pkg_mgr} -y clean all
     umount ${cache}/rootfs/proc
     umount  ${cache}/rootfs/dev
 }
