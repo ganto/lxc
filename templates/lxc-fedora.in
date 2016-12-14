@@ -663,7 +663,7 @@ This will take a couple of minutes.  Patience..."
     mkdir run/install
     mount -o bind ../bootstrap run/install
 
-    chroot . dnf -y --nogpgcheck --installroot /run/install install rpm dnf fedora-release-24
+    chroot . dnf -y --nogpgcheck --installroot /run/install install rpm dnf
 
     umount run/install
     umount proc
